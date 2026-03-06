@@ -10,7 +10,7 @@ import { useLeague } from "@/lib/use-league";
 import { useFechas } from "@/lib/use-fechas";
 import { useCourses } from "@/lib/use-courses";
 import { getScores } from "@/lib/scores-store";
-import { computePairPoints } from "@/lib/tournament-points";
+import { computeAllGroupPoints, type GroupPointsResult } from "@/lib/tournament-points";
 import { formatDateDDMMYYYY } from "@/lib/date-utils";
 
 function strokesOnHole(adjustedHandicap: number, holeHandicapIndex: number): number {
@@ -48,19 +48,16 @@ export function ClasificacionView() {
     [courses, league?.courseId]
   );
 
-  const { individual85, individual100, duplasPorFecha, totalPuntosA, totalPuntosB } = useMemo(() => {
+  const { individual85, individual100, gruposPorFecha } = useMemo(() => {
     const acc85: Record<string, number> = {};
     const acc100: Record<string, number> = {};
-    const duplas: Array<{ fecha: Fecha; pointsA: number; pointsB: number }> = [];
-    let sumA = 0;
-    let sumB = 0;
+    const grupos: Array<{ fecha: Fecha; groups: GroupPointsResult[] }> = [];
 
-    if (!league) return { individual85: [], individual100: [], duplasPorFecha: [], totalPuntosA: 0, totalPuntosB: 0 };
+    if (!league) return { individual85: [], individual100: [], gruposPorFecha: [] };
 
     for (const fecha of fechas) {
       const scores = getScores(fecha.id);
-      const group = fecha.players.slice(0, 4);
-      const playersWithInfo = group.map((fp) => ({
+      const playersWithInfo = fecha.players.map((fp) => ({
         playerId: fp.playerId,
         adjusted85: fp.adjustedHandicap85,
         adjusted100: fp.adjustedHandicap100,
@@ -73,14 +70,13 @@ export function ClasificacionView() {
         acc100[p.playerId] = (acc100[p.playerId] ?? 0) + n100;
       }
 
-      const { pointsA, pointsB } = computePairPoints(
+      const groupResults = computeAllGroupPoints(
         playersWithInfo.map((p) => ({ playerId: p.playerId, adjusted85: p.adjusted85 })),
         scores,
-        course
+        course,
+        { pairs: fecha.pairs, pairA: fecha.pairA, pairB: fecha.pairB }
       );
-      duplas.push({ fecha, pointsA, pointsB });
-      sumA += pointsA;
-      sumB += pointsB;
+      grupos.push({ fecha, groups: groupResults });
     }
 
     const individual85List = Object.entries(acc85)
@@ -102,11 +98,29 @@ export function ClasificacionView() {
     return {
       individual85: individual85List,
       individual100: individual100List,
-      duplasPorFecha: duplas,
-      totalPuntosA: sumA,
-      totalPuntosB: sumB,
+      gruposPorFecha: grupos,
     };
   }, [league, fechas, course]);
+
+  const pairPointsAccum = useMemo(() => {
+    const accum: Record<string, number> = {};
+    for (const { groups } of gruposPorFecha) {
+      for (const g of groups) {
+        const pairAKey = [g.pairA.player1Id, g.pairA.player2Id].sort().join("+");
+        const pairBKey = [g.pairB.player1Id, g.pairB.player2Id].sort().join("+");
+        accum[pairAKey] = (accum[pairAKey] ?? 0) + g.pointsA;
+        accum[pairBKey] = (accum[pairBKey] ?? 0) + g.pointsB;
+      }
+    }
+    return Object.entries(accum)
+      .map(([key, points]) => {
+        const [p1, p2] = key.split("+");
+        const name1 = mockPlayers.find((p) => p.id === p1)?.name?.split(" ")[0] ?? p1;
+        const name2 = mockPlayers.find((p) => p.id === p2)?.name?.split(" ")[0] ?? p2;
+        return { key, names: `${name1} + ${name2}`, points };
+      })
+      .sort((a, b) => b.points - a.points);
+  }, [gruposPorFecha]);
 
   if (!league) {
     return (
@@ -196,45 +210,73 @@ export function ClasificacionView() {
         </div>
       </section>
 
-      {/* Duplas (puntos por fecha + totales) */}
+      {/* Ranking de parejas */}
       <section className="overflow-hidden rounded-xl border border-slate-700/50 bg-slate-800/40">
         <div className="border-b border-slate-700/50 p-4">
-          <h2 className="text-base font-semibold text-slate-200">Duplas (match interno)</h2>
-          <p className="text-xs text-slate-500">Puntos por fecha (Pareja A vs B) y total acumulado</p>
+          <h2 className="text-base font-semibold text-slate-200">Ranking de Parejas</h2>
+          <p className="text-xs text-slate-500">Puntos acumulados por pareja</p>
         </div>
         <div className="overflow-x-auto">
-          {duplasPorFecha.length === 0 ? (
+          {pairPointsAccum.length === 0 ? (
             <div className="p-6 text-center text-slate-500">Sin datos aún</div>
           ) : (
-            <>
-              <table className="w-full min-w-[280px]">
-                <thead>
-                  <tr className="border-b border-slate-700/50 bg-slate-900/50">
-                    <th className="px-4 py-2 text-left text-xs font-medium uppercase text-slate-500">Fecha</th>
-                    <th className="px-4 py-2 text-right text-xs font-medium uppercase text-slate-500">Pareja A</th>
-                    <th className="px-4 py-2 text-right text-xs font-medium uppercase text-slate-500">Pareja B</th>
+            <table className="w-full min-w-[260px]">
+              <thead>
+                <tr className="border-b border-slate-700/50 bg-slate-900/50">
+                  <th className="px-4 py-2 text-left text-xs font-medium uppercase text-slate-500">#</th>
+                  <th className="px-4 py-2 text-left text-xs font-medium uppercase text-slate-500">Pareja</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium uppercase text-slate-500">Puntos</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-700/50">
+                {pairPointsAccum.map((row, i) => (
+                  <tr key={row.key} className="bg-slate-800/30">
+                    <td className="px-4 py-2.5 text-slate-500">{i + 1}</td>
+                    <td className="px-4 py-2.5 font-medium text-slate-100">{row.names}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-emerald-400">{row.points}</td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-700/50">
-                  {duplasPorFecha.map(({ fecha, pointsA, pointsB }) => (
-                    <tr key={fecha.id} className="bg-slate-800/30">
-                      <td className="px-4 py-2.5 text-slate-200">
-                        {fecha.label ?? formatDateDDMMYYYY(fecha.date)}
-                      </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-emerald-400">{pointsA}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-sky-400">{pointsB}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t-2 border-slate-600 bg-slate-900/50 font-semibold">
-                    <td className="px-4 py-3 text-slate-200">Total</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-emerald-400">{totalPuntosA}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-sky-400">{totalPuntosB}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </section>
+
+      {/* Detalle por fecha */}
+      <section className="overflow-hidden rounded-xl border border-slate-700/50 bg-slate-800/40">
+        <div className="border-b border-slate-700/50 p-4">
+          <h2 className="text-base font-semibold text-slate-200">Detalle por fecha</h2>
+          <p className="text-xs text-slate-500">Puntos de cada grupo por fecha</p>
+        </div>
+        <div className="divide-y divide-slate-700/50">
+          {gruposPorFecha.length === 0 ? (
+            <div className="p-6 text-center text-slate-500">Sin datos aún</div>
+          ) : (
+            gruposPorFecha.map(({ fecha, groups }) => (
+              <div key={fecha.id} className="p-4">
+                <p className="mb-2 text-sm font-medium text-slate-200">
+                  {fecha.label ?? formatDateDDMMYYYY(fecha.date)}
+                </p>
+                <div className="space-y-2">
+                  {groups.map((g, idx) => {
+                    const pANames = [g.pairA.player1Id, g.pairA.player2Id]
+                      .map((id) => mockPlayers.find((p) => p.id === id)?.name?.split(" ")[0] ?? id)
+                      .join(" + ");
+                    const pBNames = [g.pairB.player1Id, g.pairB.player2Id]
+                      .map((id) => mockPlayers.find((p) => p.id === id)?.name?.split(" ")[0] ?? id)
+                      .join(" + ");
+                    return (
+                      <div key={idx} className="flex items-center gap-4 rounded-lg bg-slate-900/30 px-3 py-2 text-sm">
+                        <span className="text-xs text-slate-500">Grupo {idx + 1}</span>
+                        <span className="text-emerald-400">{pANames}: {g.pointsA}</span>
+                        <span className="text-slate-600">vs</span>
+                        <span className="text-sky-400">{pBNames}: {g.pointsB}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))
           )}
         </div>
       </section>

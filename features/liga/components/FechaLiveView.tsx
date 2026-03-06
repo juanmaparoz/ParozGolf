@@ -5,8 +5,7 @@ import Link from "next/link";
 import { mockPlayers } from "@/mocks/mockPlayers";
 import { mockCourse } from "@/mocks/mockCourse";
 import type { League } from "@/types/league";
-import type { Fecha } from "@/types/fecha";
-import { Leaderboard } from "@/features/tournaments/components/Leaderboard";
+import type { Fecha, FechaPair } from "@/types/fecha";
 import { useFechaScores } from "@/lib/use-fecha-scores";
 import { useCourses } from "@/lib/use-courses";
 import { useAuth } from "@/features/auth/context/AuthContext";
@@ -17,6 +16,20 @@ function strokesOnHole(adjustedHandicap: number, holeHandicapIndex: number): num
     Math.floor(adjustedHandicap / 18) +
     (adjustedHandicap % 18 >= holeHandicapIndex ? 1 : 0)
   );
+}
+
+interface PlayerInfo {
+  playerId: string;
+  name: string;
+  adjusted85: number;
+  adjusted100: number;
+}
+
+interface GroupData {
+  groupIndex: number;
+  pairA: FechaPair;
+  pairB: FechaPair;
+  players: PlayerInfo[];
 }
 
 interface FechaLiveViewProps {
@@ -35,35 +48,86 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
     [courses, league.courseId]
   );
 
-  const group = fecha.players.slice(0, 4);
-  const playersWithInfo = useMemo(() => {
-    return group.map((fp) => {
-      const p = mockPlayers.find((x) => x.id === fp.playerId);
-      return {
-        playerId: fp.playerId,
-        name: p?.name ?? fp.playerId,
-        adjusted85: fp.adjustedHandicap85,
-        adjusted100: fp.adjustedHandicap100,
-      };
-    });
-  }, [group]);
+  const groups: GroupData[] = useMemo(() => {
+    const result: GroupData[] = [];
+    
+    if (fecha.pairs && fecha.pairs.length >= 2) {
+      for (let i = 0; i < fecha.pairs.length - 1; i += 2) {
+        const pairA = fecha.pairs[i];
+        const pairB = fecha.pairs[i + 1];
+        const playerIds = [pairA.player1Id, pairA.player2Id, pairB.player1Id, pairB.player2Id];
+        const players = playerIds.map((playerId) => {
+          const fp = fecha.players.find((p) => p.playerId === playerId);
+          const p = mockPlayers.find((x) => x.id === playerId);
+          return {
+            playerId,
+            name: p?.name ?? playerId,
+            adjusted85: fp?.adjustedHandicap85 ?? 0,
+            adjusted100: fp?.adjustedHandicap100 ?? 0,
+          };
+        });
+        result.push({ groupIndex: result.length, pairA, pairB, players });
+      }
+    } else if (fecha.pairA && fecha.pairB) {
+      const playerIds = [
+        fecha.pairA.player1Id,
+        fecha.pairA.player2Id,
+        fecha.pairB.player1Id,
+        fecha.pairB.player2Id,
+      ];
+      const players = playerIds.map((playerId) => {
+        const fp = fecha.players.find((p) => p.playerId === playerId);
+        const p = mockPlayers.find((x) => x.id === playerId);
+        return {
+          playerId,
+          name: p?.name ?? playerId,
+          adjusted85: fp?.adjustedHandicap85 ?? 0,
+          adjusted100: fp?.adjustedHandicap100 ?? 0,
+        };
+      });
+      result.push({ groupIndex: 0, pairA: fecha.pairA, pairB: fecha.pairB, players });
+    } else {
+      const playerIds = fecha.players.slice(0, 4).map((p) => p.playerId);
+      const players = playerIds.map((playerId) => {
+        const fp = fecha.players.find((p) => p.playerId === playerId);
+        const p = mockPlayers.find((x) => x.id === playerId);
+        return {
+          playerId,
+          name: p?.name ?? playerId,
+          adjusted85: fp?.adjustedHandicap85 ?? 0,
+          adjusted100: fp?.adjustedHandicap100 ?? 0,
+        };
+      });
+      const pairA = { player1Id: playerIds[0] ?? "", player2Id: playerIds[1] ?? "" };
+      const pairB = { player1Id: playerIds[2] ?? "", player2Id: playerIds[3] ?? "" };
+      result.push({ groupIndex: 0, pairA, pairB, players });
+    }
+    
+    return result;
+  }, [fecha]);
 
-  /** Jugador logueado: solo es "Tú" si está en los 4 de esta fecha */
+  const myGroup = useMemo(() => {
+    if (!loggedInPlayerId) return groups[0] ?? null;
+    const found = groups.find((g) => g.players.some((p) => p.playerId === loggedInPlayerId));
+    return found ?? groups[0] ?? null;
+  }, [groups, loggedInPlayerId]);
+
   const currentPlayerId =
-    loggedInPlayerId && playersWithInfo.some((p) => p.playerId === loggedInPlayerId)
+    loggedInPlayerId && myGroup?.players.some((p) => p.playerId === loggedInPlayerId)
       ? loggedInPlayerId
       : null;
 
   const orderedPlayers = useMemo(() => {
-    if (!currentPlayerId) return playersWithInfo;
-    const idx = playersWithInfo.findIndex((p) => p.playerId === currentPlayerId);
-    if (idx <= 0) return playersWithInfo;
+    if (!myGroup) return [];
+    if (!currentPlayerId) return myGroup.players;
+    const idx = myGroup.players.findIndex((p) => p.playerId === currentPlayerId);
+    if (idx <= 0) return myGroup.players;
     return [
-      playersWithInfo[idx],
-      ...playersWithInfo.slice(0, idx),
-      ...playersWithInfo.slice(idx + 1),
+      myGroup.players[idx],
+      ...myGroup.players.slice(0, idx),
+      ...myGroup.players.slice(idx + 1),
     ];
-  }, [playersWithInfo, currentPlayerId]);
+  }, [myGroup, currentPlayerId]);
 
   const holeInfo = course.holes.find((h) => h.number === currentHole);
   const par = holeInfo?.par ?? 0;
@@ -93,83 +157,84 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
     });
   }, [orderedPlayers, currentScores, holeHcpIndex]);
 
-  const PAIR_A_INDEXES = [0, 1];
-  const PAIR_B_INDEXES = [2, 3];
-
-  const { pointsA, pointsB, currentHolePoints } = useMemo(() => {
+  const groupPoints = useMemo(() => {
+    if (!myGroup) return { pointsA: 0, pointsB: 0 };
+    
+    const pairAIds = new Set([myGroup.pairA.player1Id, myGroup.pairA.player2Id]);
+    const pairBIds = new Set([myGroup.pairB.player1Id, myGroup.pairB.player2Id]);
+    
     let totalA = 0;
     let totalB = 0;
-    let bestA = 0;
-    let bestB = 0;
-    let worstA = 0;
-    let worstB = 0;
 
     for (let holeNum = 1; holeNum <= 18; holeNum++) {
       const holeData = course.holes.find((h) => h.number === holeNum);
       const hcpIndex = holeData?.handicapIndex ?? 1;
       const holeScores = scores[holeNum] ?? {};
-      const nets = playersWithInfo.map((p) => {
+      
+      const playerNets = myGroup.players.map((p) => {
         const gross = holeScores[p.playerId] ?? 0;
         const str = strokesOnHole(p.adjusted85, hcpIndex);
-        return Math.max(0, gross - str);
+        return { playerId: p.playerId, net: Math.max(0, gross - str), gross };
       });
-      const validIndices = nets
-        .map((_, i) => i)
-        .filter((i) => (holeScores[playersWithInfo[i].playerId] ?? 0) > 0);
-      if (validIndices.length === 0) continue;
+      
+      const validPlayers = playerNets.filter((p) => p.gross > 0);
+      if (validPlayers.length === 0) continue;
 
-      const validNets = validIndices.map((i) => nets[i]);
+      const validNets = validPlayers.map((p) => p.net);
       const bestNet = Math.min(...validNets);
       const worstNet = Math.max(...validNets);
-      const bestIndices = validIndices.filter((i) => nets[i] === bestNet);
-      const worstIndices = validIndices.filter((i) => nets[i] === worstNet);
+      
+      const bestPlayers = validPlayers.filter((p) => p.net === bestNet);
+      const worstPlayers = validPlayers.filter((p) => p.net === worstNet);
 
-      const bestFromA = bestIndices.filter((i) => PAIR_A_INDEXES.includes(i)).length;
-      const bestFromB = bestIndices.filter((i) => PAIR_B_INDEXES.includes(i)).length;
+      const bestFromA = bestPlayers.filter((p) => pairAIds.has(p.playerId)).length;
+      const bestFromB = bestPlayers.filter((p) => pairBIds.has(p.playerId)).length;
       if (bestFromA > 0 && bestFromB > 0) {
         totalA += 0.5;
         totalB += 0.5;
-        if (holeNum === currentHole) {
-          bestA = 0.5;
-          bestB = 0.5;
-        }
       } else if (bestFromA > 0) {
         totalA += 1;
-        if (holeNum === currentHole) bestA = 1;
       } else if (bestFromB > 0) {
         totalB += 1;
-        if (holeNum === currentHole) bestB = 1;
       }
 
-      const worstFromA = worstIndices.filter((i) => PAIR_A_INDEXES.includes(i)).length;
-      const worstFromB = worstIndices.filter((i) => PAIR_B_INDEXES.includes(i)).length;
+      const worstFromA = worstPlayers.filter((p) => pairAIds.has(p.playerId)).length;
+      const worstFromB = worstPlayers.filter((p) => pairBIds.has(p.playerId)).length;
       if (worstFromA > 0 && worstFromB > 0) {
         totalA += 0.5;
         totalB += 0.5;
-        if (holeNum === currentHole) {
-          worstA = 0.5;
-          worstB = 0.5;
-        }
       } else if (worstFromA > 0) {
         totalA += 1;
-        if (holeNum === currentHole) worstA = 1;
       } else if (worstFromB > 0) {
         totalB += 1;
-        if (holeNum === currentHole) worstB = 1;
       }
     }
 
-    return {
-      pointsA: totalA,
-      pointsB: totalB,
-      currentHolePoints: { bestA, bestB, worstA, worstB },
-    };
-  }, [playersWithInfo, scores, currentHole, course.holes]);
+    return { pointsA: totalA, pointsB: totalB };
+  }, [myGroup, scores, course.holes]);
 
-  const pairANames = [playersWithInfo[0]?.name, playersWithInfo[1]?.name].filter(Boolean).join(" + ");
-  const pairBNames = [playersWithInfo[2]?.name, playersWithInfo[3]?.name].filter(Boolean).join(" + ");
-  const leadingPair = pointsA >= pointsB ? "A" : "B";
+  const pairANames = myGroup
+    ? [myGroup.pairA.player1Id, myGroup.pairA.player2Id]
+        .map((id) => mockPlayers.find((p) => p.id === id)?.name ?? id)
+        .join(" + ")
+    : "";
+
+  const pairBNames = myGroup
+    ? [myGroup.pairB.player1Id, myGroup.pairB.player2Id]
+        .map((id) => mockPlayers.find((p) => p.id === id)?.name ?? id)
+        .join(" + ")
+    : "";
+
+  const leadingPair = groupPoints.pointsA >= groupPoints.pointsB ? "A" : "B";
   const fechaLabel = fecha.label ?? formatDateDDMMYYYY(fecha.date);
+
+  if (!myGroup) {
+    return (
+      <div className="p-4">
+        <p className="text-slate-500">No hay datos del grupo</p>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-2xl space-y-5 px-3 pb-10 sm:px-0">
@@ -179,7 +244,10 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
           <h1 className="truncate text-lg font-semibold text-slate-100 sm:text-xl">
             {league.name} · {fechaLabel}
           </h1>
-          <p className="text-xs text-slate-500">Golpes guardados automáticamente</p>
+          <p className="text-xs text-slate-500">
+            {groups.length > 1 && `Grupo ${myGroup.groupIndex + 1} de ${groups.length} · `}
+            Golpes guardados automáticamente
+          </p>
         </div>
         <Link
           href="/liga"
@@ -239,13 +307,13 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
         </div>
       </section>
 
-      {/* Bloque principal: cargar golpes de los 4 */}
+      {/* Bloque principal: cargar golpes de los 4 jugadores */}
       <section className="rounded-xl border border-emerald-800/50 bg-slate-800/50 p-4 shadow-sm ring-1 ring-emerald-900/30">
         <h2 className="mb-3 text-sm font-semibold text-slate-200">
           Hoyo {currentHole} — Cargar golpes (gross)
         </h2>
         <p className="mb-4 text-xs text-slate-500">
-          Anotá los golpes de tu grupo de 4 en este hoyo.
+          Anotá los golpes de tu grupo en este hoyo.
         </p>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {orderedPlayers.map((p) => (
@@ -318,23 +386,13 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
         </table>
       </section>
 
-      {/* Clasificación acumulada */}
-      <Leaderboard
-        players={playersWithInfo}
-        scores={scores}
-        pointsA={pointsA}
-        pointsB={pointsB}
-        parTotal={course.parTotal}
-        course={course}
-      />
-
       {/* Parejas */}
       <section className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-3 sm:p-4">
         <div className="mb-2 flex items-center gap-2">
           <span className="text-xs font-medium uppercase tracking-wider text-slate-500">
             Parejas
           </span>
-          {pointsA !== pointsB && (
+          {groupPoints.pointsA !== groupPoints.pointsB && (
             <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-semibold text-amber-400">
               Líder: Pareja {leadingPair}
             </span>
@@ -343,25 +401,25 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
         <div className="grid gap-2 sm:grid-cols-2">
           <div
             className={`rounded-lg border p-3 ${
-              leadingPair === "A" && pointsA !== pointsB
+              leadingPair === "A" && groupPoints.pointsA !== groupPoints.pointsB
                 ? "border-amber-500/50 bg-amber-950/20"
                 : "border-slate-700/50 bg-slate-900/30"
             }`}
           >
             <p className="text-xs text-slate-500">Pareja A</p>
             <p className="truncate text-sm text-slate-300">{pairANames || "—"}</p>
-            <p className="mt-0.5 text-lg font-bold tabular-nums text-emerald-400">{pointsA} pts</p>
+            <p className="mt-0.5 text-lg font-bold tabular-nums text-emerald-400">{groupPoints.pointsA} pts</p>
           </div>
           <div
             className={`rounded-lg border p-3 ${
-              leadingPair === "B" && pointsA !== pointsB
+              leadingPair === "B" && groupPoints.pointsA !== groupPoints.pointsB
                 ? "border-amber-500/50 bg-amber-950/20"
                 : "border-slate-700/50 bg-slate-900/30"
             }`}
           >
             <p className="text-xs text-slate-500">Pareja B</p>
             <p className="truncate text-sm text-slate-300">{pairBNames || "—"}</p>
-            <p className="mt-0.5 text-lg font-bold tabular-nums text-sky-400">{pointsB} pts</p>
+            <p className="mt-0.5 text-lg font-bold tabular-nums text-sky-400">{groupPoints.pointsB} pts</p>
           </div>
         </div>
       </section>

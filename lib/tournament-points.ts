@@ -1,4 +1,5 @@
 import type { Course } from "@/types/course";
+import type { FechaPair } from "@/types/fecha";
 
 function strokesOnHole(adjustedHandicap: number, holeHandicapIndex: number): number {
   return (
@@ -12,47 +13,100 @@ export interface PlayerForPoints {
   adjusted85: number;
 }
 
-const PAIR_A_INDEXES = [0, 1];
-const PAIR_B_INDEXES = [2, 3];
+export interface PairPointsOptions {
+  pairs?: FechaPair[];
+  /** @deprecated usar pairs[] */
+  pairA?: FechaPair;
+  /** @deprecated usar pairs[] */
+  pairB?: FechaPair;
+}
 
-export function computePairPoints(
-  playersWithInfo: PlayerForPoints[],
+export interface GroupPointsResult {
+  pairA: FechaPair;
+  pairB: FechaPair;
+  pointsA: number;
+  pointsB: number;
+}
+
+export function computeAllGroupPoints(
+  allPlayers: PlayerForPoints[],
   scores: Record<number, Record<string, number>>,
-  course: Course
+  course: Course,
+  options?: PairPointsOptions
+): GroupPointsResult[] {
+  const results: GroupPointsResult[] = [];
+
+  if (options?.pairs && options.pairs.length >= 2) {
+    for (let i = 0; i < options.pairs.length - 1; i += 2) {
+      const pairA = options.pairs[i];
+      const pairB = options.pairs[i + 1];
+      const groupPlayerIds = [pairA.player1Id, pairA.player2Id, pairB.player1Id, pairB.player2Id];
+      const groupPlayers = allPlayers.filter((p) => groupPlayerIds.includes(p.playerId));
+      const { pointsA, pointsB } = computeGroupPoints(groupPlayers, scores, course, pairA, pairB);
+      results.push({ pairA, pairB, pointsA, pointsB });
+    }
+  } else if (options?.pairA && options?.pairB) {
+    const pairA = options.pairA;
+    const pairB = options.pairB;
+    const groupPlayerIds = [pairA.player1Id, pairA.player2Id, pairB.player1Id, pairB.player2Id];
+    const groupPlayers = allPlayers.filter((p) => groupPlayerIds.includes(p.playerId));
+    const { pointsA, pointsB } = computeGroupPoints(groupPlayers, scores, course, pairA, pairB);
+    results.push({ pairA, pairB, pointsA, pointsB });
+  } else {
+    const groupPlayers = allPlayers.slice(0, 4);
+    const pairA = { player1Id: groupPlayers[0]?.playerId ?? "", player2Id: groupPlayers[1]?.playerId ?? "" };
+    const pairB = { player1Id: groupPlayers[2]?.playerId ?? "", player2Id: groupPlayers[3]?.playerId ?? "" };
+    const { pointsA, pointsB } = computeGroupPoints(groupPlayers, scores, course, pairA, pairB);
+    results.push({ pairA, pairB, pointsA, pointsB });
+  }
+
+  return results;
+}
+
+function computeGroupPoints(
+  groupPlayers: PlayerForPoints[],
+  scores: Record<number, Record<string, number>>,
+  course: Course,
+  pairA: FechaPair,
+  pairB: FechaPair
 ): { pointsA: number; pointsB: number } {
   let totalA = 0;
   let totalB = 0;
+
+  const pairAIds = new Set([pairA.player1Id, pairA.player2Id]);
+  const pairBIds = new Set([pairB.player1Id, pairB.player2Id]);
 
   for (let holeNum = 1; holeNum <= 18; holeNum++) {
     const holeData = course.holes.find((h) => h.number === holeNum);
     const hcpIndex = holeData?.handicapIndex ?? 1;
     const holeScores = scores[holeNum] ?? {};
-    const nets = playersWithInfo.map((p) => {
+    
+    const playerNets = groupPlayers.map((p) => {
       const gross = holeScores[p.playerId] ?? 0;
       const str = strokesOnHole(p.adjusted85, hcpIndex);
-      return Math.max(0, gross - str);
+      return { playerId: p.playerId, net: Math.max(0, gross - str), gross };
     });
-    const validIndices = playersWithInfo
-      .map((_, i) => i)
-      .filter((i) => (holeScores[playersWithInfo[i].playerId] ?? 0) > 0);
-    if (validIndices.length === 0) continue;
+    
+    const validPlayers = playerNets.filter((p) => p.gross > 0);
+    if (validPlayers.length === 0) continue;
 
-    const validNets = validIndices.map((i) => nets[i]);
+    const validNets = validPlayers.map((p) => p.net);
     const bestNet = Math.min(...validNets);
     const worstNet = Math.max(...validNets);
-    const bestIndices = validIndices.filter((i) => nets[i] === bestNet);
-    const worstIndices = validIndices.filter((i) => nets[i] === worstNet);
+    
+    const bestPlayers = validPlayers.filter((p) => p.net === bestNet);
+    const worstPlayers = validPlayers.filter((p) => p.net === worstNet);
 
-    const bestFromA = bestIndices.filter((i) => PAIR_A_INDEXES.includes(i)).length;
-    const bestFromB = bestIndices.filter((i) => PAIR_B_INDEXES.includes(i)).length;
+    const bestFromA = bestPlayers.filter((p) => pairAIds.has(p.playerId)).length;
+    const bestFromB = bestPlayers.filter((p) => pairBIds.has(p.playerId)).length;
     if (bestFromA > 0 && bestFromB > 0) {
       totalA += 0.5;
       totalB += 0.5;
     } else if (bestFromA > 0) totalA += 1;
     else if (bestFromB > 0) totalB += 1;
 
-    const worstFromA = worstIndices.filter((i) => PAIR_A_INDEXES.includes(i)).length;
-    const worstFromB = worstIndices.filter((i) => PAIR_B_INDEXES.includes(i)).length;
+    const worstFromA = worstPlayers.filter((p) => pairAIds.has(p.playerId)).length;
+    const worstFromB = worstPlayers.filter((p) => pairBIds.has(p.playerId)).length;
     if (worstFromA > 0 && worstFromB > 0) {
       totalA += 0.5;
       totalB += 0.5;
@@ -61,4 +115,16 @@ export function computePairPoints(
   }
 
   return { pointsA: totalA, pointsB: totalB };
+}
+
+/** @deprecated usar computeAllGroupPoints */
+export function computePairPoints(
+  playersWithInfo: PlayerForPoints[],
+  scores: Record<number, Record<string, number>>,
+  course: Course,
+  options?: PairPointsOptions
+): { pointsA: number; pointsB: number } {
+  const results = computeAllGroupPoints(playersWithInfo, scores, course, options);
+  if (results.length === 0) return { pointsA: 0, pointsB: 0 };
+  return { pointsA: results[0].pointsA, pointsB: results[0].pointsB };
 }

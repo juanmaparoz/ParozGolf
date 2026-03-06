@@ -1,4 +1,4 @@
-import type { Fecha, FechaPlayer } from "@/types/fecha";
+import type { Fecha, FechaPlayer, FechaPair } from "@/types/fecha";
 
 const STORAGE_KEY_PREFIX = "golf-saas-fechas-";
 
@@ -32,6 +32,11 @@ export interface CreateFechaInput {
   date: string;
   label?: string;
   players: FechaPlayer[];
+  pairs?: FechaPair[];
+  /** @deprecated usar pairs[] */
+  pairA?: FechaPair;
+  /** @deprecated usar pairs[] */
+  pairB?: FechaPair;
 }
 
 export function addFecha(input: CreateFechaInput): Fecha {
@@ -43,6 +48,9 @@ export function addFecha(input: CreateFechaInput): Fecha {
     date: input.date,
     label: input.label,
     players: [...input.players],
+    pairs: input.pairs,
+    pairA: input.pairA,
+    pairB: input.pairB,
   };
   fechas.push(fecha);
   persist(input.leagueId, fechas);
