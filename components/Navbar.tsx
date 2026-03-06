@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/features/auth/context/AuthContext";
 import { useSidebar } from "@/components/SidebarContext";
 
-const SIDEBAR_ROUTES = ["/dashboard", "/tournaments", "/live", "/courses", "/players"] as const;
+const SIDEBAR_ROUTES = ["/dashboard", "/tournaments", "/live", "/courses", "/players", "/liga"] as const;
 
 function isSidebarRoute(pathname: string): boolean {
   return SIDEBAR_ROUTES.some((r) => pathname === r || pathname.startsWith(r + "/"));

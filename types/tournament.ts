@@ -1,4 +1,5 @@
 import type { TournamentPlayer } from "./tournament-player";
+export type { TournamentPlayer } from "./tournament-player";
 
 export type TournamentStatus = "draft" | "ready" | "in_progress" | "finished";
 
