@@ -26,6 +26,40 @@ export interface GroupPointsResult {
   pairB: FechaPair;
   pointsA: number;
   pointsB: number;
+  /** Suma (mejor pelota neto del par − par del hoyo) por hoyo. Menor = mejor. */
+  bestBallVsParA: number;
+  bestBallVsParB: number;
+}
+
+/** Mejor pelota neto de la pareja vs par del hoyo (como “el cuarto” pero con 2 pelotas). */
+export function pairBestBallVsParTotal(
+  pair: FechaPair,
+  groupPlayers: PlayerForPoints[],
+  scores: Record<number, Record<string, number>>,
+  course: Course,
+  startHole = 1,
+  endHole = 18
+): number {
+  const ids = new Set([pair.player1Id, pair.player2Id]);
+  const players = groupPlayers.filter((p) => ids.has(p.playerId));
+  let total = 0;
+  for (let holeNum = startHole; holeNum <= endHole; holeNum++) {
+    const holeData = course.holes.find((h) => h.number === holeNum);
+    const holePar = holeData?.par ?? 4;
+    const hcpIndex = holeData?.handicapIndex ?? 1;
+    const holeScores = scores[holeNum] ?? {};
+    const nets: number[] = [];
+    for (const p of players) {
+      const gross = holeScores[p.playerId] ?? 0;
+      if (gross <= 0) continue;
+      const str = strokesOnHole(p.adjusted85, hcpIndex);
+      nets.push(Math.max(0, gross - str));
+    }
+    if (nets.length === 0) continue;
+    const bestBall = Math.min(...nets);
+    total += bestBall - holePar;
+  }
+  return total;
 }
 
 export function computeAllGroupPoints(
@@ -43,7 +77,9 @@ export function computeAllGroupPoints(
       const groupPlayerIds = [pairA.player1Id, pairA.player2Id, pairB.player1Id, pairB.player2Id];
       const groupPlayers = allPlayers.filter((p) => groupPlayerIds.includes(p.playerId));
       const { pointsA, pointsB } = computeGroupPoints(groupPlayers, scores, course, pairA, pairB);
-      results.push({ pairA, pairB, pointsA, pointsB });
+      const bestBallVsParA = pairBestBallVsParTotal(pairA, groupPlayers, scores, course, 1, 18);
+      const bestBallVsParB = pairBestBallVsParTotal(pairB, groupPlayers, scores, course, 1, 18);
+      results.push({ pairA, pairB, pointsA, pointsB, bestBallVsParA, bestBallVsParB });
     }
   } else if (options?.pairA && options?.pairB) {
     const pairA = options.pairA;
@@ -51,13 +87,17 @@ export function computeAllGroupPoints(
     const groupPlayerIds = [pairA.player1Id, pairA.player2Id, pairB.player1Id, pairB.player2Id];
     const groupPlayers = allPlayers.filter((p) => groupPlayerIds.includes(p.playerId));
     const { pointsA, pointsB } = computeGroupPoints(groupPlayers, scores, course, pairA, pairB);
-    results.push({ pairA, pairB, pointsA, pointsB });
+    const bestBallVsParA = pairBestBallVsParTotal(pairA, groupPlayers, scores, course, 1, 18);
+    const bestBallVsParB = pairBestBallVsParTotal(pairB, groupPlayers, scores, course, 1, 18);
+    results.push({ pairA, pairB, pointsA, pointsB, bestBallVsParA, bestBallVsParB });
   } else {
     const groupPlayers = allPlayers.slice(0, 4);
     const pairA = { player1Id: groupPlayers[0]?.playerId ?? "", player2Id: groupPlayers[1]?.playerId ?? "" };
     const pairB = { player1Id: groupPlayers[2]?.playerId ?? "", player2Id: groupPlayers[3]?.playerId ?? "" };
     const { pointsA, pointsB } = computeGroupPoints(groupPlayers, scores, course, pairA, pairB);
-    results.push({ pairA, pairB, pointsA, pointsB });
+    const bestBallVsParA = pairBestBallVsParTotal(pairA, groupPlayers, scores, course, 1, 18);
+    const bestBallVsParB = pairBestBallVsParTotal(pairB, groupPlayers, scores, course, 1, 18);
+    results.push({ pairA, pairB, pointsA, pointsB, bestBallVsParA, bestBallVsParB });
   }
 
   return results;
@@ -97,23 +137,21 @@ function computeGroupPoints(
     const bestPlayers = validPlayers.filter((p) => p.net === bestNet);
     const worstPlayers = validPlayers.filter((p) => p.net === worstNet);
 
-    // +2 puntos por mejor pelota neto
-    const bestFromA = bestPlayers.filter((p) => pairAIds.has(p.playerId)).length;
-    const bestFromB = bestPlayers.filter((p) => pairBIds.has(p.playerId)).length;
-    if (bestFromA > 0 && bestFromB > 0) {
-      totalA += 1; // empate: 1 punto cada uno
-      totalB += 1;
-    } else if (bestFromA > 0) totalA += 2;
-    else if (bestFromB > 0) totalB += 2;
+    // +2 puntos por mejor pelota neto (empate entre parejas: no reparte nada)
+    const bestTouchedA = bestPlayers.some((p) => pairAIds.has(p.playerId));
+    const bestTouchedB = bestPlayers.some((p) => pairBIds.has(p.playerId));
+    if (bestTouchedA && bestTouchedB) {
+      // no suma
+    } else if (bestTouchedA) totalA += 2;
+    else if (bestTouchedB) totalB += 2;
 
-    // +1 punto por peor pelota neto
-    const worstFromA = worstPlayers.filter((p) => pairAIds.has(p.playerId)).length;
-    const worstFromB = worstPlayers.filter((p) => pairBIds.has(p.playerId)).length;
-    if (worstFromA > 0 && worstFromB > 0) {
-      totalA += 0.5; // empate: 0.5 cada uno
-      totalB += 0.5;
-    } else if (worstFromA > 0) totalA += 1;
-    else if (worstFromB > 0) totalB += 1;
+    // +1 punto por peor pelota neto (empate entre parejas: no reparte nada)
+    const worstTouchedA = worstPlayers.some((p) => pairAIds.has(p.playerId));
+    const worstTouchedB = worstPlayers.some((p) => pairBIds.has(p.playerId));
+    if (worstTouchedA && worstTouchedB) {
+      // no suma
+    } else if (worstTouchedA) totalA += 1;
+    else if (worstTouchedB) totalB += 1;
   }
 
   return { pointsA: totalA, pointsB: totalB };

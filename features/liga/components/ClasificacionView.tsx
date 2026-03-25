@@ -102,25 +102,27 @@ export function ClasificacionView() {
     };
   }, [league, fechas, course]);
 
-  const pairPointsAccum = useMemo(() => {
+  const pairBestBallAccum = useMemo(() => {
     const accum: Record<string, number> = {};
     for (const { groups } of gruposPorFecha) {
       for (const g of groups) {
         const pairAKey = [g.pairA.player1Id, g.pairA.player2Id].sort().join("+");
         const pairBKey = [g.pairB.player1Id, g.pairB.player2Id].sort().join("+");
-        accum[pairAKey] = (accum[pairAKey] ?? 0) + g.pointsA;
-        accum[pairBKey] = (accum[pairBKey] ?? 0) + g.pointsB;
+        accum[pairAKey] = (accum[pairAKey] ?? 0) + g.bestBallVsParA;
+        accum[pairBKey] = (accum[pairBKey] ?? 0) + g.bestBallVsParB;
       }
     }
     return Object.entries(accum)
-      .map(([key, points]) => {
+      .map(([key, bestBallVsPar]) => {
         const [p1, p2] = key.split("+");
         const name1 = mockPlayers.find((p) => p.id === p1)?.name?.split(" ")[0] ?? p1;
         const name2 = mockPlayers.find((p) => p.id === p2)?.name?.split(" ")[0] ?? p2;
-        return { key, names: `${name1} + ${name2}`, points };
+        return { key, names: `${name1} + ${name2}`, bestBallVsPar };
       })
-      .sort((a, b) => b.points - a.points);
+      .sort((a, b) => a.bestBallVsPar - b.bestBallVsPar);
   }, [gruposPorFecha]);
+
+  const formatVsPar = (n: number) => (n === 0 ? "E" : n > 0 ? `+${n}` : String(n));
 
   if (!league) {
     return (
@@ -217,7 +219,7 @@ export function ClasificacionView() {
           <p className="text-xs text-slate-500">Puntos acumulados por pareja</p>
         </div>
         <div className="overflow-x-auto">
-          {pairPointsAccum.length === 0 ? (
+          {pairBestBallAccum.length === 0 ? (
             <div className="p-6 text-center text-slate-500">Sin datos aún</div>
           ) : (
             <table className="w-full min-w-[260px]">
@@ -225,15 +227,17 @@ export function ClasificacionView() {
                 <tr className="border-b border-slate-700/50 bg-slate-900/50">
                   <th className="px-4 py-2 text-left text-xs font-medium uppercase text-slate-500">#</th>
                   <th className="px-4 py-2 text-left text-xs font-medium uppercase text-slate-500">Pareja</th>
-                  <th className="px-4 py-2 text-right text-xs font-medium uppercase text-slate-500">Puntos</th>
+                  <th className="px-4 py-2 text-right text-xs font-medium uppercase text-slate-500">Vs par</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-700/50">
-                {pairPointsAccum.map((row, i) => (
+                {pairBestBallAccum.map((row, i) => (
                   <tr key={row.key} className="bg-slate-800/30">
                     <td className="px-4 py-2.5 text-slate-500">{i + 1}</td>
                     <td className="px-4 py-2.5 font-medium text-slate-100">{row.names}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-emerald-400">{row.points}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-emerald-400">
+                      {formatVsPar(row.bestBallVsPar)}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -266,11 +270,15 @@ export function ClasificacionView() {
                       .map((id) => mockPlayers.find((p) => p.id === id)?.name?.split(" ")[0] ?? id)
                       .join(" + ");
                     return (
-                      <div key={idx} className="flex items-center gap-4 rounded-lg bg-slate-900/30 px-3 py-2 text-sm">
+                      <div key={idx} className="flex flex-col gap-1 rounded-lg bg-slate-900/30 px-3 py-2 text-sm sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
                         <span className="text-xs text-slate-500">Grupo {idx + 1}</span>
-                        <span className="text-emerald-400">{pANames}: {g.pointsA}</span>
+                        <span className="text-emerald-400">
+                          {pANames}: match {g.pointsA} pts · vs par {formatVsPar(g.bestBallVsParA)}
+                        </span>
                         <span className="text-slate-600">vs</span>
-                        <span className="text-sky-400">{pBNames}: {g.pointsB}</span>
+                        <span className="text-sky-400">
+                          {pBNames}: match {g.pointsB} pts · vs par {formatVsPar(g.bestBallVsParB)}
+                        </span>
                       </div>
                     );
                   })}

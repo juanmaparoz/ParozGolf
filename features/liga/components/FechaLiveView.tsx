@@ -10,6 +10,7 @@ import { useFechaScores } from "@/lib/use-fecha-scores";
 import { useCourses } from "@/lib/use-courses";
 import { useAuth } from "@/features/auth/context/AuthContext";
 import { formatDateDDMMYYYY } from "@/lib/date-utils";
+import { pairBestBallVsParTotal } from "@/lib/tournament-points";
 
 function strokesOnHole(adjustedHandicap: number, holeHandicapIndex: number): number {
   return (
@@ -23,6 +24,10 @@ function firstNameOnly(displayName: string): string {
   const t = displayName.trim();
   if (!t) return displayName;
   return t.split(/\s+/)[0] ?? t;
+}
+
+function formatVsPar(n: number): string {
+  return n === 0 ? "E" : n > 0 ? `+${n}` : String(n);
 }
 
 interface PlayerInfo {
@@ -203,28 +208,20 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
       const bestPlayers = validPlayers.filter((p) => p.net === bestNet);
       const worstPlayers = validPlayers.filter((p) => p.net === worstNet);
 
-      // +2 puntos por mejor pelota
-      const bestFromA = bestPlayers.filter((p) => pairAIds.has(p.playerId)).length;
-      const bestFromB = bestPlayers.filter((p) => pairBIds.has(p.playerId)).length;
-      if (bestFromA > 0 && bestFromB > 0) {
-        totalA += 1; // empate: 1 punto cada uno
-        totalB += 1;
-      } else if (bestFromA > 0) {
-        totalA += 2;
-      } else if (bestFromB > 0) {
-        totalB += 2;
+      // +2 puntos por mejor pelota (empate entre parejas: no reparte)
+      const bestTouchedA = bestPlayers.some((p) => pairAIds.has(p.playerId));
+      const bestTouchedB = bestPlayers.some((p) => pairBIds.has(p.playerId));
+      if (!bestTouchedA || !bestTouchedB) {
+        if (bestTouchedA) totalA += 2;
+        else if (bestTouchedB) totalB += 2;
       }
 
-      // +1 punto por peor pelota
-      const worstFromA = worstPlayers.filter((p) => pairAIds.has(p.playerId)).length;
-      const worstFromB = worstPlayers.filter((p) => pairBIds.has(p.playerId)).length;
-      if (worstFromA > 0 && worstFromB > 0) {
-        totalA += 0.5; // empate: 0.5 cada uno
-        totalB += 0.5;
-      } else if (worstFromA > 0) {
-        totalA += 1;
-      } else if (worstFromB > 0) {
-        totalB += 1;
+      // +1 punto por peor pelota (empate entre parejas: no reparte)
+      const worstTouchedA = worstPlayers.some((p) => pairAIds.has(p.playerId));
+      const worstTouchedB = worstPlayers.some((p) => pairBIds.has(p.playerId));
+      if (!worstTouchedA || !worstTouchedB) {
+        if (worstTouchedA) totalA += 1;
+        else if (worstTouchedB) totalB += 1;
       }
     }
 
@@ -282,11 +279,11 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
     return { totalVsPar, byHole };
   }, [myGroup, scores, course.holes]);
 
-  // Resumen de todos los grupos/parejas
+  // Resumen de todos los grupos/parejas (orden por mejor pelota vs par, no por puntos del match)
   const allPairsResults = useMemo(() => {
     const results: Array<{
       pairNames: string;
-      points: number;
+      bestBallVsPar: number;
       gross: number;
       groupIndex: number;
       isMyPair: boolean;
@@ -295,48 +292,24 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
     for (const group of groups) {
       const pairAIds = new Set([group.pairA.player1Id, group.pairA.player2Id]);
       const pairBIds = new Set([group.pairB.player1Id, group.pairB.player2Id]);
-      
-      let ptsA = 0, ptsB = 0;
-      let grossA = 0, grossB = 0;
 
+      let grossA = 0;
+      let grossB = 0;
       for (let holeNum = 1; holeNum <= 18; holeNum++) {
-        const holeData = course.holes.find((h) => h.number === holeNum);
-        const hcpIndex = holeData?.handicapIndex ?? 1;
         const holeScores = scores[holeNum] ?? {};
-        
-        const playerNets = group.players.map((p) => {
-          const gross = holeScores[p.playerId] ?? 0;
-          const str = strokesOnHole(p.adjusted85, hcpIndex);
-          return { playerId: p.playerId, net: Math.max(0, gross - str), gross };
+        group.players.forEach((p) => {
+          const g = holeScores[p.playerId] ?? 0;
+          if (pairAIds.has(p.playerId)) grossA += g;
+          if (pairBIds.has(p.playerId)) grossB += g;
         });
-        
-        playerNets.forEach((p) => {
-          if (pairAIds.has(p.playerId)) grossA += p.gross;
-          if (pairBIds.has(p.playerId)) grossB += p.gross;
-        });
-        
-        const validPlayers = playerNets.filter((p) => p.gross > 0);
-        if (validPlayers.length === 0) continue;
-
-        const validNets = validPlayers.map((p) => p.net);
-        const bestNet = Math.min(...validNets);
-        const worstNet = Math.max(...validNets);
-        
-        const bestPlayers = validPlayers.filter((p) => p.net === bestNet);
-        const worstPlayers = validPlayers.filter((p) => p.net === worstNet);
-
-        const bestFromA = bestPlayers.filter((p) => pairAIds.has(p.playerId)).length;
-        const bestFromB = bestPlayers.filter((p) => pairBIds.has(p.playerId)).length;
-        if (bestFromA > 0 && bestFromB > 0) { ptsA += 1; ptsB += 1; }
-        else if (bestFromA > 0) ptsA += 2;
-        else if (bestFromB > 0) ptsB += 2;
-
-        const worstFromA = worstPlayers.filter((p) => pairAIds.has(p.playerId)).length;
-        const worstFromB = worstPlayers.filter((p) => pairBIds.has(p.playerId)).length;
-        if (worstFromA > 0 && worstFromB > 0) { ptsA += 0.5; ptsB += 0.5; }
-        else if (worstFromA > 0) ptsA += 1;
-        else if (worstFromB > 0) ptsB += 1;
       }
+
+      const groupPlayersPts = group.players.map((p) => ({
+        playerId: p.playerId,
+        adjusted85: p.adjusted85,
+      }));
+      const bba = pairBestBallVsParTotal(group.pairA, groupPlayersPts, scores, course, 1, 18);
+      const bbb = pairBestBallVsParTotal(group.pairB, groupPlayersPts, scores, course, 1, 18);
 
       const namesA = [group.pairA.player1Id, group.pairA.player2Id]
         .map((id) => firstNameOnly(mockPlayers.find((p) => p.id === id)?.name ?? id))
@@ -348,12 +321,24 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
       const isMyPairA = currentPlayerId ? pairAIds.has(currentPlayerId) : false;
       const isMyPairB = currentPlayerId ? pairBIds.has(currentPlayerId) : false;
 
-      results.push({ pairNames: namesA, points: ptsA, gross: grossA, groupIndex: group.groupIndex, isMyPair: isMyPairA });
-      results.push({ pairNames: namesB, points: ptsB, gross: grossB, groupIndex: group.groupIndex, isMyPair: isMyPairB });
+      results.push({
+        pairNames: namesA,
+        bestBallVsPar: bba,
+        gross: grossA,
+        groupIndex: group.groupIndex,
+        isMyPair: isMyPairA,
+      });
+      results.push({
+        pairNames: namesB,
+        bestBallVsPar: bbb,
+        gross: grossB,
+        groupIndex: group.groupIndex,
+        isMyPair: isMyPairB,
+      });
     }
 
-    return results.sort((a, b) => b.points - a.points);
-  }, [groups, scores, course.holes, currentPlayerId]);
+    return results.sort((a, b) => a.bestBallVsPar - b.bestBallVsPar);
+  }, [groups, scores, course, currentPlayerId]);
 
   const pairANames = myGroup
     ? [myGroup.pairA.player1Id, myGroup.pairA.player2Id]
@@ -367,7 +352,47 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
         .join(" + ")
     : "";
 
-  const leadingPair = totalPoints.pointsA >= totalPoints.pointsB ? "A" : "B";
+  const pairBestBallTotal = useMemo(() => {
+    if (!myGroup) return { a: 0, b: 0 };
+    const pts = myGroup.players.map((p) => ({ playerId: p.playerId, adjusted85: p.adjusted85 }));
+    return {
+      a: pairBestBallVsParTotal(myGroup.pairA, pts, scores, course, 1, 18),
+      b: pairBestBallVsParTotal(myGroup.pairB, pts, scores, course, 1, 18),
+    };
+  }, [myGroup, scores, course]);
+
+  const pairBestBallIda = useMemo(() => {
+    if (!myGroup) return { a: 0, b: 0 };
+    const pts = myGroup.players.map((p) => ({ playerId: p.playerId, adjusted85: p.adjusted85 }));
+    return {
+      a: pairBestBallVsParTotal(myGroup.pairA, pts, scores, course, 1, 9),
+      b: pairBestBallVsParTotal(myGroup.pairB, pts, scores, course, 1, 9),
+    };
+  }, [myGroup, scores, course]);
+
+  const pairBestBallVuelta = useMemo(() => {
+    if (!myGroup) return { a: 0, b: 0 };
+    const pts = myGroup.players.map((p) => ({ playerId: p.playerId, adjusted85: p.adjusted85 }));
+    return {
+      a: pairBestBallVsParTotal(myGroup.pairA, pts, scores, course, 10, 18),
+      b: pairBestBallVsParTotal(myGroup.pairB, pts, scores, course, 10, 18),
+    };
+  }, [myGroup, scores, course]);
+
+  const matchMarginLine = useMemo(() => {
+    const diff = totalPoints.pointsA - totalPoints.pointsB;
+    if (diff === 0) return null;
+    const leaderNames = diff > 0 ? pairANames : pairBNames;
+    return `Van ${Math.abs(diff)} arriba ${leaderNames}`;
+  }, [totalPoints, pairANames, pairBNames]);
+
+  const leadingPairByMatch =
+    totalPoints.pointsA > totalPoints.pointsB
+      ? "A"
+      : totalPoints.pointsB > totalPoints.pointsA
+        ? "B"
+        : null;
+
   const fechaLabel = fecha.label ?? formatDateDDMMYYYY(fecha.date);
 
   if (!myGroup) {
@@ -377,8 +402,6 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
       </div>
     );
   }
-
-  const formatVsPar = (n: number) => (n === 0 ? "E" : n > 0 ? `+${n}` : String(n));
 
   return (
     <div className="mx-auto max-w-2xl space-y-5 px-3 pb-10 sm:px-0">
@@ -524,37 +547,49 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
 
       {/* Parejas - Puntos totales */}
       <section className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-3 sm:p-4">
-        <div className="mb-2 flex items-center gap-2">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium uppercase tracking-wider text-slate-500">
             Match (mejor +2, peor +1)
           </span>
-          {totalPoints.pointsA !== totalPoints.pointsB && (
+          {matchMarginLine && (
             <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-semibold text-amber-400">
-              Van ganando: {leadingPair === "A" ? pairANames : pairBNames}
+              {matchMarginLine}
             </span>
           )}
         </div>
         <div className="grid gap-2 sm:grid-cols-2">
           <div
             className={`rounded-lg border p-3 ${
-              leadingPair === "A" && totalPoints.pointsA !== totalPoints.pointsB
+              leadingPairByMatch === "A"
                 ? "border-amber-500/50 bg-amber-950/20"
                 : "border-slate-700/50 bg-slate-900/30"
             }`}
           >
             <p className="truncate text-sm text-slate-300">{pairANames || "—"}</p>
             <p className="mt-0.5 text-xl font-bold tabular-nums text-emerald-400">{totalPoints.pointsA} pts</p>
+            <p className="text-xs text-slate-400">
+              Vs par (mejor bola):{" "}
+              <span className="font-semibold tabular-nums text-slate-200">
+                {formatVsPar(pairBestBallTotal.a)}
+              </span>
+            </p>
             <p className="text-xs text-slate-500">Gross: {totalPoints.grossA}</p>
           </div>
           <div
             className={`rounded-lg border p-3 ${
-              leadingPair === "B" && totalPoints.pointsA !== totalPoints.pointsB
+              leadingPairByMatch === "B"
                 ? "border-amber-500/50 bg-amber-950/20"
                 : "border-slate-700/50 bg-slate-900/30"
             }`}
           >
             <p className="truncate text-sm text-slate-300">{pairBNames || "—"}</p>
             <p className="mt-0.5 text-xl font-bold tabular-nums text-sky-400">{totalPoints.pointsB} pts</p>
+            <p className="text-xs text-slate-400">
+              Vs par (mejor bola):{" "}
+              <span className="font-semibold tabular-nums text-slate-200">
+                {formatVsPar(pairBestBallTotal.b)}
+              </span>
+            </p>
             <p className="text-xs text-slate-500">Gross: {totalPoints.grossB}</p>
           </div>
         </div>
@@ -572,6 +607,9 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
               <span className="text-emerald-400">{pairANames}: {idaPoints.pointsA} pts</span>
               <span className="text-slate-500">Gross: {idaPoints.grossA}</span>
             </div>
+            <div className="mb-1 text-xs text-slate-500">
+              Vs par: {formatVsPar(pairBestBallIda.a)} · {formatVsPar(pairBestBallIda.b)}
+            </div>
             <div className="flex justify-between text-sm">
               <span className="text-sky-400">{pairBNames}: {idaPoints.pointsB} pts</span>
               <span className="text-slate-500">Gross: {idaPoints.grossB}</span>
@@ -582,6 +620,9 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
             <div className="flex justify-between text-sm">
               <span className="text-emerald-400">{pairANames}: {vueltaPoints.pointsA} pts</span>
               <span className="text-slate-500">Gross: {vueltaPoints.grossA}</span>
+            </div>
+            <div className="mb-1 text-xs text-slate-500">
+              Vs par: {formatVsPar(pairBestBallVuelta.a)} · {formatVsPar(pairBestBallVuelta.b)}
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-sky-400">{pairBNames}: {vueltaPoints.pointsB} pts</span>
@@ -631,7 +672,7 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-slate-500">G:{pair.gross}</span>
-                  <span className="font-bold tabular-nums text-amber-400">{pair.points} pts</span>
+                  <span className="font-bold tabular-nums text-amber-400">{formatVsPar(pair.bestBallVsPar)}</span>
                 </div>
               </div>
             ))}
