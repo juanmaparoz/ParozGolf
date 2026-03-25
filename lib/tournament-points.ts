@@ -97,18 +97,20 @@ function computeGroupPoints(
     const bestPlayers = validPlayers.filter((p) => p.net === bestNet);
     const worstPlayers = validPlayers.filter((p) => p.net === worstNet);
 
+    // +2 puntos por mejor pelota neto
     const bestFromA = bestPlayers.filter((p) => pairAIds.has(p.playerId)).length;
     const bestFromB = bestPlayers.filter((p) => pairBIds.has(p.playerId)).length;
     if (bestFromA > 0 && bestFromB > 0) {
-      totalA += 0.5;
-      totalB += 0.5;
-    } else if (bestFromA > 0) totalA += 1;
-    else if (bestFromB > 0) totalB += 1;
+      totalA += 1; // empate: 1 punto cada uno
+      totalB += 1;
+    } else if (bestFromA > 0) totalA += 2;
+    else if (bestFromB > 0) totalB += 2;
 
+    // +1 punto por peor pelota neto
     const worstFromA = worstPlayers.filter((p) => pairAIds.has(p.playerId)).length;
     const worstFromB = worstPlayers.filter((p) => pairBIds.has(p.playerId)).length;
     if (worstFromA > 0 && worstFromB > 0) {
-      totalA += 0.5;
+      totalA += 0.5; // empate: 0.5 cada uno
       totalB += 0.5;
     } else if (worstFromA > 0) totalA += 1;
     else if (worstFromB > 0) totalB += 1;

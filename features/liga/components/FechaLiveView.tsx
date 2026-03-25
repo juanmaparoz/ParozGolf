@@ -18,6 +18,13 @@ function strokesOnHole(adjustedHandicap: number, holeHandicapIndex: number): num
   );
 }
 
+/** Primer nombre solamente (más corto en mobile). */
+function firstNameOnly(displayName: string): string {
+  const t = displayName.trim();
+  if (!t) return displayName;
+  return t.split(/\s+/)[0] ?? t;
+}
+
 interface PlayerInfo {
   playerId: string;
   name: string;
@@ -61,7 +68,7 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
           const p = mockPlayers.find((x) => x.id === playerId);
           return {
             playerId,
-            name: p?.name ?? playerId,
+            name: firstNameOnly(p?.name ?? playerId),
             adjusted85: fp?.adjustedHandicap85 ?? 0,
             adjusted100: fp?.adjustedHandicap100 ?? 0,
           };
@@ -80,7 +87,7 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
         const p = mockPlayers.find((x) => x.id === playerId);
         return {
           playerId,
-          name: p?.name ?? playerId,
+          name: firstNameOnly(p?.name ?? playerId),
           adjusted85: fp?.adjustedHandicap85 ?? 0,
           adjusted100: fp?.adjustedHandicap100 ?? 0,
         };
@@ -93,7 +100,7 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
         const p = mockPlayers.find((x) => x.id === playerId);
         return {
           playerId,
-          name: p?.name ?? playerId,
+          name: firstNameOnly(p?.name ?? playerId),
           adjusted85: fp?.adjustedHandicap85 ?? 0,
           adjusted100: fp?.adjustedHandicap100 ?? 0,
         };
@@ -157,16 +164,19 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
     });
   }, [orderedPlayers, currentScores, holeHcpIndex]);
 
-  const groupPoints = useMemo(() => {
-    if (!myGroup) return { pointsA: 0, pointsB: 0 };
+  // Calcular puntos con nuevo sistema: +2 mejor pelota, +1 peor pelota
+  const calculatePointsForHoles = (startHole: number, endHole: number) => {
+    if (!myGroup) return { pointsA: 0, pointsB: 0, grossA: 0, grossB: 0 };
     
     const pairAIds = new Set([myGroup.pairA.player1Id, myGroup.pairA.player2Id]);
     const pairBIds = new Set([myGroup.pairB.player1Id, myGroup.pairB.player2Id]);
     
     let totalA = 0;
     let totalB = 0;
+    let grossA = 0;
+    let grossB = 0;
 
-    for (let holeNum = 1; holeNum <= 18; holeNum++) {
+    for (let holeNum = startHole; holeNum <= endHole; holeNum++) {
       const holeData = course.holes.find((h) => h.number === holeNum);
       const hcpIndex = holeData?.handicapIndex ?? 1;
       const holeScores = scores[holeNum] ?? {};
@@ -175,6 +185,12 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
         const gross = holeScores[p.playerId] ?? 0;
         const str = strokesOnHole(p.adjusted85, hcpIndex);
         return { playerId: p.playerId, net: Math.max(0, gross - str), gross };
+      });
+      
+      // Sumar gross por pareja
+      playerNets.forEach((p) => {
+        if (pairAIds.has(p.playerId)) grossA += p.gross;
+        if (pairBIds.has(p.playerId)) grossB += p.gross;
       });
       
       const validPlayers = playerNets.filter((p) => p.gross > 0);
@@ -187,21 +203,23 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
       const bestPlayers = validPlayers.filter((p) => p.net === bestNet);
       const worstPlayers = validPlayers.filter((p) => p.net === worstNet);
 
+      // +2 puntos por mejor pelota
       const bestFromA = bestPlayers.filter((p) => pairAIds.has(p.playerId)).length;
       const bestFromB = bestPlayers.filter((p) => pairBIds.has(p.playerId)).length;
       if (bestFromA > 0 && bestFromB > 0) {
-        totalA += 0.5;
-        totalB += 0.5;
-      } else if (bestFromA > 0) {
-        totalA += 1;
-      } else if (bestFromB > 0) {
+        totalA += 1; // empate: 1 punto cada uno
         totalB += 1;
+      } else if (bestFromA > 0) {
+        totalA += 2;
+      } else if (bestFromB > 0) {
+        totalB += 2;
       }
 
+      // +1 punto por peor pelota
       const worstFromA = worstPlayers.filter((p) => pairAIds.has(p.playerId)).length;
       const worstFromB = worstPlayers.filter((p) => pairBIds.has(p.playerId)).length;
       if (worstFromA > 0 && worstFromB > 0) {
-        totalA += 0.5;
+        totalA += 0.5; // empate: 0.5 cada uno
         totalB += 0.5;
       } else if (worstFromA > 0) {
         totalA += 1;
@@ -210,22 +228,146 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
       }
     }
 
-    return { pointsA: totalA, pointsB: totalB };
+    return { pointsA: totalA, pointsB: totalB, grossA, grossB };
+  };
+
+  // Puntos totales (18 hoyos)
+  const totalPoints = useMemo(() => calculatePointsForHoles(1, 18), [myGroup, scores, course.holes]);
+  
+  // Parcial ida (hoyos 1-9)
+  const idaPoints = useMemo(() => calculatePointsForHoles(1, 9), [myGroup, scores, course.holes]);
+  
+  // Parcial vuelta (hoyos 10-18)
+  const vueltaPoints = useMemo(() => calculatePointsForHoles(10, 18), [myGroup, scores, course.holes]);
+
+  // El Cuarto: 3 mejores pelotas neto vs par
+  const elCuarto = useMemo(() => {
+    if (!myGroup) return { totalVsPar: 0, byHole: [] as Array<{ hole: number; best3Net: number; par: number; diff: number }> };
+    
+    let totalVsPar = 0;
+    const byHole: Array<{ hole: number; best3Net: number; par: number; diff: number }> = [];
+
+    for (let holeNum = 1; holeNum <= 18; holeNum++) {
+      const holeData = course.holes.find((h) => h.number === holeNum);
+      const holePar = holeData?.par ?? 4;
+      const hcpIndex = holeData?.handicapIndex ?? 1;
+      const holeScores = scores[holeNum] ?? {};
+      
+      const playerNets = myGroup.players
+        .map((p) => {
+          const gross = holeScores[p.playerId] ?? 0;
+          if (gross === 0) return null;
+          const str = strokesOnHole(p.adjusted85, hcpIndex);
+          return Math.max(0, gross - str);
+        })
+        .filter((n): n is number => n !== null)
+        .sort((a, b) => a - b);
+
+      if (playerNets.length >= 3) {
+        const best3 = playerNets.slice(0, 3);
+        const best3Sum = best3.reduce((a, b) => a + b, 0);
+        const parFor3 = holePar * 3;
+        const diff = best3Sum - parFor3;
+        totalVsPar += diff;
+        byHole.push({ hole: holeNum, best3Net: best3Sum, par: parFor3, diff });
+      } else if (playerNets.length > 0) {
+        const sum = playerNets.reduce((a, b) => a + b, 0);
+        const parForN = holePar * playerNets.length;
+        const diff = sum - parForN;
+        totalVsPar += diff;
+        byHole.push({ hole: holeNum, best3Net: sum, par: parForN, diff });
+      }
+    }
+
+    return { totalVsPar, byHole };
   }, [myGroup, scores, course.holes]);
+
+  // Resumen de todos los grupos/parejas
+  const allPairsResults = useMemo(() => {
+    const results: Array<{
+      pairNames: string;
+      points: number;
+      gross: number;
+      groupIndex: number;
+      isMyPair: boolean;
+    }> = [];
+
+    for (const group of groups) {
+      const pairAIds = new Set([group.pairA.player1Id, group.pairA.player2Id]);
+      const pairBIds = new Set([group.pairB.player1Id, group.pairB.player2Id]);
+      
+      let ptsA = 0, ptsB = 0;
+      let grossA = 0, grossB = 0;
+
+      for (let holeNum = 1; holeNum <= 18; holeNum++) {
+        const holeData = course.holes.find((h) => h.number === holeNum);
+        const hcpIndex = holeData?.handicapIndex ?? 1;
+        const holeScores = scores[holeNum] ?? {};
+        
+        const playerNets = group.players.map((p) => {
+          const gross = holeScores[p.playerId] ?? 0;
+          const str = strokesOnHole(p.adjusted85, hcpIndex);
+          return { playerId: p.playerId, net: Math.max(0, gross - str), gross };
+        });
+        
+        playerNets.forEach((p) => {
+          if (pairAIds.has(p.playerId)) grossA += p.gross;
+          if (pairBIds.has(p.playerId)) grossB += p.gross;
+        });
+        
+        const validPlayers = playerNets.filter((p) => p.gross > 0);
+        if (validPlayers.length === 0) continue;
+
+        const validNets = validPlayers.map((p) => p.net);
+        const bestNet = Math.min(...validNets);
+        const worstNet = Math.max(...validNets);
+        
+        const bestPlayers = validPlayers.filter((p) => p.net === bestNet);
+        const worstPlayers = validPlayers.filter((p) => p.net === worstNet);
+
+        const bestFromA = bestPlayers.filter((p) => pairAIds.has(p.playerId)).length;
+        const bestFromB = bestPlayers.filter((p) => pairBIds.has(p.playerId)).length;
+        if (bestFromA > 0 && bestFromB > 0) { ptsA += 1; ptsB += 1; }
+        else if (bestFromA > 0) ptsA += 2;
+        else if (bestFromB > 0) ptsB += 2;
+
+        const worstFromA = worstPlayers.filter((p) => pairAIds.has(p.playerId)).length;
+        const worstFromB = worstPlayers.filter((p) => pairBIds.has(p.playerId)).length;
+        if (worstFromA > 0 && worstFromB > 0) { ptsA += 0.5; ptsB += 0.5; }
+        else if (worstFromA > 0) ptsA += 1;
+        else if (worstFromB > 0) ptsB += 1;
+      }
+
+      const namesA = [group.pairA.player1Id, group.pairA.player2Id]
+        .map((id) => firstNameOnly(mockPlayers.find((p) => p.id === id)?.name ?? id))
+        .join(" + ");
+      const namesB = [group.pairB.player1Id, group.pairB.player2Id]
+        .map((id) => firstNameOnly(mockPlayers.find((p) => p.id === id)?.name ?? id))
+        .join(" + ");
+
+      const isMyPairA = currentPlayerId ? pairAIds.has(currentPlayerId) : false;
+      const isMyPairB = currentPlayerId ? pairBIds.has(currentPlayerId) : false;
+
+      results.push({ pairNames: namesA, points: ptsA, gross: grossA, groupIndex: group.groupIndex, isMyPair: isMyPairA });
+      results.push({ pairNames: namesB, points: ptsB, gross: grossB, groupIndex: group.groupIndex, isMyPair: isMyPairB });
+    }
+
+    return results.sort((a, b) => b.points - a.points);
+  }, [groups, scores, course.holes, currentPlayerId]);
 
   const pairANames = myGroup
     ? [myGroup.pairA.player1Id, myGroup.pairA.player2Id]
-        .map((id) => mockPlayers.find((p) => p.id === id)?.name ?? id)
+        .map((id) => firstNameOnly(mockPlayers.find((p) => p.id === id)?.name ?? id))
         .join(" + ")
     : "";
 
   const pairBNames = myGroup
     ? [myGroup.pairB.player1Id, myGroup.pairB.player2Id]
-        .map((id) => mockPlayers.find((p) => p.id === id)?.name ?? id)
+        .map((id) => firstNameOnly(mockPlayers.find((p) => p.id === id)?.name ?? id))
         .join(" + ")
     : "";
 
-  const leadingPair = groupPoints.pointsA >= groupPoints.pointsB ? "A" : "B";
+  const leadingPair = totalPoints.pointsA >= totalPoints.pointsB ? "A" : "B";
   const fechaLabel = fecha.label ?? formatDateDDMMYYYY(fecha.date);
 
   if (!myGroup) {
@@ -235,6 +377,8 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
       </div>
     );
   }
+
+  const formatVsPar = (n: number) => (n === 0 ? "E" : n > 0 ? `+${n}` : String(n));
 
   return (
     <div className="mx-auto max-w-2xl space-y-5 px-3 pb-10 sm:px-0">
@@ -257,7 +401,7 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
         </Link>
       </header>
 
-      {/* Hoyo actual: strip compacto + par y navegación */}
+      {/* Hoyo actual */}
       <section className="rounded-lg border border-slate-700/50 bg-slate-800/40 p-3">
         <div className="mb-2 flex items-center justify-between">
           <span className="text-xs font-medium uppercase tracking-wider text-slate-500">
@@ -269,6 +413,7 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
           <div className="flex gap-0.5 overflow-x-auto pb-1">
             {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].map((h) => {
               const isCurrent = h === currentHole;
+              const isMilestone = h === 9 || h === 18;
               return (
                 <button
                   key={h}
@@ -277,6 +422,8 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
                   className={`min-w-[2rem] rounded py-1.5 px-1 text-center text-sm font-semibold transition ${
                     isCurrent
                       ? "bg-emerald-600 text-white"
+                      : isMilestone
+                      ? "bg-amber-700/50 text-amber-300 hover:bg-amber-600/50"
                       : "bg-slate-700/60 text-slate-400 hover:bg-slate-600 hover:text-slate-200"
                   }`}
                   aria-current={isCurrent ? "true" : undefined}
@@ -307,14 +454,11 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
         </div>
       </section>
 
-      {/* Bloque principal: cargar golpes de los 4 jugadores */}
+      {/* Cargar golpes */}
       <section className="rounded-xl border border-emerald-800/50 bg-slate-800/50 p-4 shadow-sm ring-1 ring-emerald-900/30">
         <h2 className="mb-3 text-sm font-semibold text-slate-200">
           Hoyo {currentHole} — Cargar golpes (gross)
         </h2>
-        <p className="mb-4 text-xs text-slate-500">
-          Anotá los golpes de tu grupo en este hoyo.
-        </p>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {orderedPlayers.map((p) => (
             <div
@@ -327,16 +471,13 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
             >
               <label className="mb-1 block truncate text-xs font-medium text-slate-400">
                 {p.playerId === currentPlayerId ? "Tú" : p.name}
-                {p.playerId === currentPlayerId && p.name !== "Tú" ? ` · ${p.name}` : ""}
               </label>
               <input
                 type="number"
                 min={0}
                 max={99}
                 value={currentScores[p.playerId] ?? ""}
-                onChange={(e) =>
-                  setGross(p.playerId, parseInt(e.target.value, 10) || 0)
-                }
+                onChange={(e) => setGross(p.playerId, parseInt(e.target.value, 10) || 0)}
                 placeholder="—"
                 className="w-full rounded border border-slate-600 bg-slate-800 py-2.5 text-center text-lg font-semibold tabular-nums text-slate-100 placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               />
@@ -345,7 +486,7 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
         </div>
       </section>
 
-      {/* Resumen del hoyo (compacto) */}
+      {/* Resumen del hoyo */}
       <section className="overflow-hidden rounded-lg border border-slate-700/50 bg-slate-800/40">
         <div className="border-b border-slate-700/50 bg-slate-900/50 px-3 py-2 text-xs font-medium text-slate-500">
           Resumen hoyo {currentHole} (Par {par})
@@ -355,14 +496,12 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
             <tr className="border-b border-slate-700/50 text-left text-xs text-slate-500">
               <th className="px-3 py-2">Jugador</th>
               <th className="px-2 py-2 text-right">Gross</th>
-              <th className="px-2 py-2 text-right">Neto 85</th>
-              <th className="px-2 py-2 text-right">Neto 100</th>
+              <th className="px-2 py-2 text-right">Neto</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-700/50">
             {tableRows.map((row) => {
-              const toPar85 = row.gross > 0 ? row.net85 - par : null;
-              const toPar100 = row.gross > 0 ? row.net100 - par : null;
+              const toPar = row.gross > 0 ? row.net85 - par : null;
               const fmt = (v: number | null) =>
                 v === null ? "—" : v === 0 ? "E" : v > 0 ? `+${v}` : String(v);
               return (
@@ -374,10 +513,7 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
                     {row.gross || "—"}
                   </td>
                   <td className="px-2 py-2 text-right tabular-nums">
-                    {row.gross > 0 ? `${row.net85} (${fmt(toPar85)})` : "—"}
-                  </td>
-                  <td className="px-2 py-2 text-right tabular-nums">
-                    {row.gross > 0 ? `${row.net100} (${fmt(toPar100)})` : "—"}
+                    {row.gross > 0 ? `${row.net85} (${fmt(toPar)})` : "—"}
                   </td>
                 </tr>
               );
@@ -386,43 +522,122 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
         </table>
       </section>
 
-      {/* Parejas */}
+      {/* Parejas - Puntos totales */}
       <section className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-3 sm:p-4">
         <div className="mb-2 flex items-center gap-2">
           <span className="text-xs font-medium uppercase tracking-wider text-slate-500">
-            Parejas
+            Match (mejor +2, peor +1)
           </span>
-          {groupPoints.pointsA !== groupPoints.pointsB && (
+          {totalPoints.pointsA !== totalPoints.pointsB && (
             <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-semibold text-amber-400">
-              Líder: Pareja {leadingPair}
+              Van ganando: {leadingPair === "A" ? pairANames : pairBNames}
             </span>
           )}
         </div>
         <div className="grid gap-2 sm:grid-cols-2">
           <div
             className={`rounded-lg border p-3 ${
-              leadingPair === "A" && groupPoints.pointsA !== groupPoints.pointsB
+              leadingPair === "A" && totalPoints.pointsA !== totalPoints.pointsB
                 ? "border-amber-500/50 bg-amber-950/20"
                 : "border-slate-700/50 bg-slate-900/30"
             }`}
           >
-            <p className="text-xs text-slate-500">Pareja A</p>
             <p className="truncate text-sm text-slate-300">{pairANames || "—"}</p>
-            <p className="mt-0.5 text-lg font-bold tabular-nums text-emerald-400">{groupPoints.pointsA} pts</p>
+            <p className="mt-0.5 text-xl font-bold tabular-nums text-emerald-400">{totalPoints.pointsA} pts</p>
+            <p className="text-xs text-slate-500">Gross: {totalPoints.grossA}</p>
           </div>
           <div
             className={`rounded-lg border p-3 ${
-              leadingPair === "B" && groupPoints.pointsA !== groupPoints.pointsB
+              leadingPair === "B" && totalPoints.pointsA !== totalPoints.pointsB
                 ? "border-amber-500/50 bg-amber-950/20"
                 : "border-slate-700/50 bg-slate-900/30"
             }`}
           >
-            <p className="text-xs text-slate-500">Pareja B</p>
             <p className="truncate text-sm text-slate-300">{pairBNames || "—"}</p>
-            <p className="mt-0.5 text-lg font-bold tabular-nums text-sky-400">{groupPoints.pointsB} pts</p>
+            <p className="mt-0.5 text-xl font-bold tabular-nums text-sky-400">{totalPoints.pointsB} pts</p>
+            <p className="text-xs text-slate-500">Gross: {totalPoints.grossB}</p>
           </div>
         </div>
       </section>
+
+      {/* Parciales Ida / Vuelta */}
+      <section className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-3 sm:p-4">
+        <p className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">
+          Parciales
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-3">
+            <p className="mb-2 text-xs font-semibold text-slate-400">Ida (1-9)</p>
+            <div className="flex justify-between text-sm">
+              <span className="text-emerald-400">{pairANames}: {idaPoints.pointsA} pts</span>
+              <span className="text-slate-500">Gross: {idaPoints.grossA}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-sky-400">{pairBNames}: {idaPoints.pointsB} pts</span>
+              <span className="text-slate-500">Gross: {idaPoints.grossB}</span>
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-3">
+            <p className="mb-2 text-xs font-semibold text-slate-400">Vuelta (10-18)</p>
+            <div className="flex justify-between text-sm">
+              <span className="text-emerald-400">{pairANames}: {vueltaPoints.pointsA} pts</span>
+              <span className="text-slate-500">Gross: {vueltaPoints.grossA}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-sky-400">{pairBNames}: {vueltaPoints.pointsB} pts</span>
+              <span className="text-slate-500">Gross: {vueltaPoints.grossB}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* El Cuarto: 3 mejores pelotas vs par */}
+      <section className="rounded-xl border border-purple-800/50 bg-slate-800/40 p-3 sm:p-4">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-xs font-medium uppercase tracking-wider text-slate-500">
+            El Cuarto (3 mejores vs par)
+          </span>
+          <span className={`text-lg font-bold tabular-nums ${elCuarto.totalVsPar <= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+            {formatVsPar(elCuarto.totalVsPar)}
+          </span>
+        </div>
+        <p className="text-xs text-slate-500">
+          Suma de las 3 mejores pelotas neto por hoyo comparado con par×3
+        </p>
+      </section>
+
+      {/* Resumen de todos los equipos */}
+      {groups.length >= 1 && (
+        <section className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-3 sm:p-4">
+          <p className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">
+            Ranking de parejas
+          </p>
+          <div className="space-y-1">
+            {allPairsResults.map((pair, idx) => (
+              <div
+                key={`${pair.groupIndex}-${pair.pairNames}`}
+                className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm ${
+                  pair.isMyPair
+                    ? "border border-emerald-600/50 bg-emerald-950/20"
+                    : "bg-slate-900/30"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="w-5 text-center text-xs text-slate-500">{idx + 1}</span>
+                  <span className={pair.isMyPair ? "font-medium text-emerald-300" : "text-slate-300"}>
+                    {pair.pairNames}
+                  </span>
+                  {pair.isMyPair && <span className="text-xs text-emerald-500">(Tú)</span>}
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-slate-500">G:{pair.gross}</span>
+                  <span className="font-bold tabular-nums text-amber-400">{pair.points} pts</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
