@@ -11,6 +11,7 @@ import { useCourses } from "@/lib/use-courses";
 import { useAuth } from "@/features/auth/context/AuthContext";
 import { formatDateDDMMYYYY } from "@/lib/date-utils";
 import { pairBestBallVsParTotal } from "@/lib/tournament-points";
+import { LiveScorecardGrid } from "@/components/LiveScorecardGrid";
 
 function strokesOnHole(adjustedHandicap: number, holeHandicapIndex: number): number {
   return (
@@ -141,33 +142,28 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
     ];
   }, [myGroup, currentPlayerId]);
 
-  const holeInfo = course.holes.find((h) => h.number === currentHole);
-  const par = holeInfo?.par ?? 0;
-  const holeHcpIndex = holeInfo?.handicapIndex ?? 1;
-
-  const currentScores = scores[currentHole] ?? {};
-
-  const setGross = (playerId: string, value: number) => {
+  const setGrossHole = (hole: number, playerId: string, value: number) => {
     const v = value < 0 || Number.isNaN(value) ? 0 : value;
     setScores((prev) => ({
       ...prev,
-      [currentHole]: {
-        ...(prev[currentHole] ?? {}),
+      [hole]: {
+        ...(prev[hole] ?? {}),
         [playerId]: v,
       },
     }));
   };
 
-  const tableRows = useMemo(() => {
-    return orderedPlayers.map((p) => {
-      const gross = currentScores[p.playerId] ?? 0;
-      const strokes85 = strokesOnHole(p.adjusted85, holeHcpIndex);
-      const strokes100 = strokesOnHole(p.adjusted100, holeHcpIndex);
-      const net85 = Math.max(0, gross - strokes85);
-      const net100 = Math.max(0, gross - strokes100);
-      return { ...p, gross, net85, net100 };
-    });
-  }, [orderedPlayers, currentScores, holeHcpIndex]);
+  const scorecardPlayers = useMemo(
+    () =>
+      orderedPlayers.map((p) => ({
+        playerId: p.playerId,
+        name: currentPlayerId !== null && p.playerId === currentPlayerId ? "Tú" : p.name,
+        adjusted85: p.adjusted85,
+        adjusted100: p.adjusted100,
+        highlight: currentPlayerId !== null && p.playerId === currentPlayerId,
+      })),
+    [orderedPlayers, currentPlayerId]
+  );
 
   // Calcular puntos con nuevo sistema: +2 mejor pelota, +1 peor pelota
   const calculatePointsForHoles = (startHole: number, endHole: number) => {
@@ -404,7 +400,7 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-5 px-3 pb-10 sm:px-0">
+    <div className="mx-auto max-w-6xl space-y-5 px-3 pb-10 sm:px-0">
       {/* Header */}
       <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/50 pb-4">
         <div className="min-w-0">
@@ -424,126 +420,16 @@ export function FechaLiveView({ league, fecha }: FechaLiveViewProps) {
         </Link>
       </header>
 
-      {/* Hoyo actual */}
-      <section className="rounded-lg border border-slate-700/50 bg-slate-800/40 p-3">
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-xs font-medium uppercase tracking-wider text-slate-500">
-            Hoyo
-          </span>
-          <span className="text-sm text-slate-400">Par {par}</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex gap-0.5 overflow-x-auto pb-1">
-            {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].map((h) => {
-              const isCurrent = h === currentHole;
-              const isMilestone = h === 9 || h === 18;
-              return (
-                <button
-                  key={h}
-                  type="button"
-                  onClick={() => setCurrentHole(h)}
-                  className={`min-w-[2rem] rounded py-1.5 px-1 text-center text-sm font-semibold transition ${
-                    isCurrent
-                      ? "bg-emerald-600 text-white"
-                      : isMilestone
-                      ? "bg-amber-700/50 text-amber-300 hover:bg-amber-600/50"
-                      : "bg-slate-700/60 text-slate-400 hover:bg-slate-600 hover:text-slate-200"
-                  }`}
-                  aria-current={isCurrent ? "true" : undefined}
-                >
-                  {h}
-                </button>
-              );
-            })}
-          </div>
-          <div className="flex shrink-0 gap-1">
-            <button
-              type="button"
-              onClick={() => setCurrentHole((x) => Math.max(1, x - 1))}
-              disabled={currentHole <= 1}
-              className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-300 disabled:opacity-40"
-            >
-              ←
-            </button>
-            <button
-              type="button"
-              onClick={() => setCurrentHole((x) => Math.min(18, x + 1))}
-              disabled={currentHole >= 18}
-              className="rounded border border-slate-600 bg-slate-800 px-2 py-1 text-xs text-slate-300 disabled:opacity-40"
-            >
-              →
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* Cargar golpes */}
-      <section className="rounded-xl border border-emerald-800/50 bg-slate-800/50 p-4 shadow-sm ring-1 ring-emerald-900/30">
-        <h2 className="mb-3 text-sm font-semibold text-slate-200">
-          Hoyo {currentHole} — Cargar golpes (gross)
-        </h2>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {orderedPlayers.map((p) => (
-            <div
-              key={p.playerId}
-              className={`rounded-lg border bg-slate-900/50 p-3 ${
-                p.playerId === currentPlayerId
-                  ? "border-emerald-600/50 ring-1 ring-emerald-500/30"
-                  : "border-slate-700/50"
-              }`}
-            >
-              <label className="mb-1 block truncate text-xs font-medium text-slate-400">
-                {p.playerId === currentPlayerId ? "Tú" : p.name}
-              </label>
-              <input
-                type="number"
-                min={0}
-                max={99}
-                value={currentScores[p.playerId] ?? ""}
-                onChange={(e) => setGross(p.playerId, parseInt(e.target.value, 10) || 0)}
-                placeholder="—"
-                className="w-full rounded border border-slate-600 bg-slate-800 py-2.5 text-center text-lg font-semibold tabular-nums text-slate-100 placeholder-slate-500 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              />
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Resumen del hoyo */}
-      <section className="overflow-hidden rounded-lg border border-slate-700/50 bg-slate-800/40">
-        <div className="border-b border-slate-700/50 bg-slate-900/50 px-3 py-2 text-xs font-medium text-slate-500">
-          Resumen hoyo {currentHole} (Par {par})
-        </div>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-700/50 text-left text-xs text-slate-500">
-              <th className="px-3 py-2">Jugador</th>
-              <th className="px-2 py-2 text-right">Gross</th>
-              <th className="px-2 py-2 text-right">Neto</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-700/50">
-            {tableRows.map((row) => {
-              const toPar = row.gross > 0 ? row.net85 - par : null;
-              const fmt = (v: number | null) =>
-                v === null ? "—" : v === 0 ? "E" : v > 0 ? `+${v}` : String(v);
-              return (
-                <tr key={row.playerId} className="bg-slate-800/30">
-                  <td className="px-3 py-2 font-medium text-slate-100">
-                    {row.playerId === currentPlayerId ? "Tú" : row.name}
-                  </td>
-                  <td className="px-2 py-2 text-right tabular-nums text-slate-300">
-                    {row.gross || "—"}
-                  </td>
-                  <td className="px-2 py-2 text-right tabular-nums">
-                    {row.gross > 0 ? `${row.net85} (${fmt(toPar)})` : "—"}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </section>
+      <LiveScorecardGrid
+        course={course}
+        players={scorecardPlayers}
+        scores={scores}
+        currentHole={currentHole}
+        onCurrentHoleChange={setCurrentHole}
+        onSetGross={setGrossHole}
+        netBasis="85"
+        modeLabel="85%"
+      />
 
       {/* Parejas - Puntos totales */}
       <section className="rounded-xl border border-slate-700/50 bg-slate-800/40 p-3 sm:p-4">

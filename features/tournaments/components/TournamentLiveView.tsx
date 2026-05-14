@@ -7,6 +7,7 @@ import { mockCourse } from "@/mocks/mockCourse";
 import type { Tournament, TournamentPlayer } from "@/types/tournament";
 import { Leaderboard } from "./Leaderboard";
 import { useTournamentScores } from "@/lib/use-tournament-scores";
+import { LiveScorecardGrid } from "@/components/LiveScorecardGrid";
 
 /** Strokes received on a hole (handicap index 1–18) */
 function strokesOnHole(adjustedHandicap: number, holeHandicapIndex: number): number {
@@ -42,33 +43,16 @@ export function TournamentLiveView({ tournament }: LiveProps) {
     });
   }, [group]);
 
-  const holeInfo = mockCourse.holes.find((h) => h.number === currentHole);
-  const par = holeInfo?.par ?? 0;
-  const holeHcpIndex = holeInfo?.handicapIndex ?? 1;
-
-  const currentScores = scores[currentHole] ?? {};
-
-  const setGross = (playerId: string, value: number) => {
+  const setGrossHole = (hole: number, playerId: string, value: number) => {
     const v = value < 0 || Number.isNaN(value) ? 0 : value;
     setScores((prev) => ({
       ...prev,
-      [currentHole]: {
-        ...(prev[currentHole] ?? {}),
+      [hole]: {
+        ...(prev[hole] ?? {}),
         [playerId]: v,
       },
     }));
   };
-
-  const tableRows = useMemo(() => {
-    return playersWithInfo.map((p) => {
-      const gross = currentScores[p.playerId] ?? 0;
-      const strokes85 = strokesOnHole(p.adjusted85, holeHcpIndex);
-      const strokes100 = strokesOnHole(p.adjusted100, holeHcpIndex);
-      const net85 = Math.max(0, gross - strokes85);
-      const net100 = Math.max(0, gross - strokes100);
-      return { ...p, gross, net85, net100 };
-    });
-  }, [playersWithInfo, currentScores, holeHcpIndex]);
 
   /** Pareja A = jugadores 1-2 (índices 0,1), Pareja B = 3-4 (índices 2,3) */
   const PAIR_A_INDEXES = [0, 1];
@@ -151,7 +135,7 @@ export function TournamentLiveView({ tournament }: LiveProps) {
   const leadingPair = pointsA >= pointsB ? "A" : "B";
 
   return (
-    <div className="mx-auto max-w-2xl space-y-4 px-2 pb-8 sm:space-y-6 sm:px-0">
+    <div className="mx-auto max-w-6xl space-y-4 px-2 pb-8 sm:space-y-6 sm:px-0">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <h1 className="truncate text-xl font-bold text-slate-100 sm:text-2xl">
@@ -167,61 +151,16 @@ export function TournamentLiveView({ tournament }: LiveProps) {
         </Link>
       </div>
 
-      {/* Indicador de hoyo actual: strip 1-18 */}
-      <section className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-3 sm:p-4">
-        <p className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-500">
-          Hoyo actual
-        </p>
-        <div className="flex gap-1 overflow-x-auto pb-1 sm:gap-1.5">
-          {Array.from({ length: 18 }, (_, i) => i + 1).map((h) => {
-            const isCurrent = h === currentHole;
-            return (
-              <button
-                key={h}
-                type="button"
-                onClick={() => setCurrentHole(h)}
-                className={`flex min-w-[2.25rem] shrink-0 flex-col items-center rounded-lg py-2 px-1 text-center transition sm:min-w-[2.5rem] sm:py-2.5 ${
-                  isCurrent
-                    ? "bg-emerald-600 text-white ring-2 ring-emerald-400 ring-offset-2 ring-offset-slate-800"
-                    : "bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-slate-200"
-                }`}
-                aria-label={isCurrent ? `Hoyo ${h} (actual)` : `Ir al hoyo ${h}`}
-                aria-current={isCurrent ? "true" : undefined}
-              >
-                <span className="text-sm font-bold tabular-nums">{h}</span>
-                {isCurrent && (
-                  <span className="mt-0.5 text-[10px] font-medium uppercase tracking-wider opacity-90">
-                    Actual
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-        <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
-          <span>Par {par}</span>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setCurrentHole((x) => Math.max(1, x - 1))}
-              disabled={currentHole <= 1}
-              className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-slate-300 hover:bg-slate-700 disabled:opacity-40 sm:px-4"
-              aria-label="Hoyo anterior"
-            >
-              ← Anterior
-            </button>
-            <button
-              type="button"
-              onClick={() => setCurrentHole((x) => Math.min(18, x + 1))}
-              disabled={currentHole >= 18}
-              className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1.5 text-slate-300 hover:bg-slate-700 disabled:opacity-40 sm:px-4"
-              aria-label="Hoyo siguiente"
-            >
-              Siguiente →
-            </button>
-          </div>
-        </div>
-      </section>
+      <LiveScorecardGrid
+        course={mockCourse}
+        players={playersWithInfo}
+        scores={scores}
+        currentHole={currentHole}
+        onCurrentHoleChange={setCurrentHole}
+        onSetGross={setGrossHole}
+        netBasis="100"
+        modeLabel="100%"
+      />
 
       {/* Leaderboard */}
       <Leaderboard
@@ -298,95 +237,6 @@ export function TournamentLiveView({ tournament }: LiveProps) {
         </div>
       </section>
 
-      {/* Inputs golpes (gross) por jugador */}
-      <section className="rounded-xl border border-slate-700/50 bg-slate-800/50 p-3 sm:p-4">
-        <p className="mb-3 text-xs font-medium uppercase tracking-wider text-slate-500">
-          Golpes (gross) · Hoyo {currentHole}
-        </p>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 sm:gap-3">
-          {playersWithInfo.map((p) => (
-            <div
-              key={p.playerId}
-              className="flex flex-col gap-1 rounded-lg border border-slate-700/50 bg-slate-900/30 p-2 sm:p-3"
-            >
-              <label className="truncate text-xs font-medium text-slate-300 sm:text-sm">
-                {p.name}
-              </label>
-              <input
-                type="number"
-                min={0}
-                max={99}
-                value={currentScores[p.playerId] ?? ""}
-                onChange={(e) =>
-                  setGross(p.playerId, parseInt(e.target.value, 10) || 0)
-                }
-                placeholder="—"
-                className="w-full rounded-lg border border-slate-600 bg-slate-800 px-2 py-2.5 text-base tabular-nums text-slate-100 placeholder-slate-500 focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500 sm:px-3 sm:text-lg"
-              />
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Tabla en vivo: verde bajo par, rojo sobre par */}
-      <section className="overflow-hidden rounded-xl border border-slate-700/50 bg-slate-800/50">
-        <h2 className="border-b border-slate-700/50 bg-slate-900/50 px-3 py-2.5 text-sm font-semibold text-slate-200 sm:px-4 sm:py-3">
-          Hoyo {currentHole} · Gross | Neto 85 | Neto 100 (vs par {par})
-        </h2>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[260px] text-sm sm:text-base">
-            <thead>
-              <tr className="border-b border-slate-700/50 bg-slate-900/30">
-                <th className="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 sm:px-4 sm:py-2.5">
-                  Jugador
-                </th>
-                <th className="px-2 py-2 text-right text-xs font-medium uppercase text-slate-500 sm:px-3">
-                  Gross
-                </th>
-                <th className="px-2 py-2 text-right text-xs font-medium uppercase text-slate-500 sm:px-3">
-                  Neto 85
-                </th>
-                <th className="px-2 py-2 text-right text-xs font-medium uppercase text-slate-500 sm:px-3">
-                  Neto 100
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-700/50">
-              {tableRows.map((row) => {
-                const toPar85 = row.gross > 0 ? row.net85 - par : null;
-                const toPar100 = row.gross > 0 ? row.net100 - par : null;
-                const cellClass = (toPar: number | null) => {
-                  if (toPar === null) return "text-slate-500";
-                  if (toPar < 0) return "text-emerald-400 font-medium";
-                  if (toPar > 0) return "text-rose-400 font-medium";
-                  return "text-slate-300";
-                };
-                const formatToPar = (v: number | null) => {
-                  if (v === null) return "—";
-                  if (v === 0) return "E";
-                  return v > 0 ? `+${v}` : String(v);
-                };
-                return (
-                  <tr key={row.playerId} className="bg-slate-800/30">
-                    <td className="px-3 py-2.5 font-medium text-slate-100 sm:px-4 sm:py-3">
-                      {row.name}
-                    </td>
-                    <td className="px-2 py-2.5 text-right tabular-nums text-slate-300 sm:px-3">
-                      {row.gross || "—"}
-                    </td>
-                    <td className={`px-2 py-2.5 text-right tabular-nums sm:px-3 ${cellClass(toPar85)}`}>
-                      {row.gross > 0 ? `${row.net85} (${formatToPar(toPar85)})` : "—"}
-                    </td>
-                    <td className={`px-2 py-2.5 text-right tabular-nums sm:px-3 ${cellClass(toPar100)}`}>
-                      {row.gross > 0 ? `${row.net100} (${formatToPar(toPar100)})` : "—"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
     </div>
   );
 }
